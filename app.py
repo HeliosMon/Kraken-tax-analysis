@@ -25,7 +25,7 @@ with st.sidebar:
     days_threshold = months_threshold * 30.44 
 
     st.divider()
-    st.info("💡 **Tip:** This tool uses the 'Absolute Proportional' method to ensure the Cost Basis is 100% accurate down to the cent.")
+    st.info("💡 **Tip:** Still in trial phase")
 
 # --- CORE LOGIC ---
 def calculate_tax_logic(df, target_year, hold_days):
