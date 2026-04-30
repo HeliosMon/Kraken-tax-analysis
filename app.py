@@ -5,43 +5,42 @@ from datetime import datetime
 
 # --- PAGE CONFIGURATION ---
 st.set_page_config(
-    page_title="Kraken Tax FIFO Tool",
-    page_icon="💰",
+    page_title="Custom Crypto Tax Tool",
+    page_icon="⚖️",
     layout="wide"
 )
 
-# --- CUSTOM CSS FOR STYLING ---
-st.markdown("""
-    <style>
-    .main {
-        background-color: #f5f7f9;
-    }
-    .stMetric {
-        background-color: #ffffff;
-        padding: 15px;
-        border-radius: 10px;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.05);
-    }
-    </style>
-    """, unsafe_allow_html=True)
-
-# --- SIDEBAR ---
+# --- SIDEBAR CONTROLS ---
 with st.sidebar:
-    st.title("Settings & Help")
-    st.info("""
-    **How to use:**
-    1. Export your **Ledger** (not Trades) from Kraken.
-    2. Upload the `.csv` file here.
-    3. Review the calculated FIFO gains.
-    4. Download the Excel for your records.
-    """)
+    st.title("⚙️ Tax Parameters")
+    
+    # 1. Year Selection
+    current_year = datetime.now().year
+    selected_year = st.selectbox(
+        "Which tax year do you want to calculate?",
+        options=list(range(current_year, 2010, -1)),
+        index=0
+    )
+    
+    # 2. Holding Period Selection
+    months_threshold = st.slider(
+        "Holding period for tax-free gains (Months)",
+        min_value=0,
+        max_value=120, # Up to 10 years (relevant for some staking laws)
+        value=12,
+        help="In Germany, this is usually 12 months."
+    )
+    # Convert months to days for the logic
+    days_threshold = months_threshold * 30.44 
+
     st.divider()
-    st.warning("⚠️ **Privacy:** Data is processed in memory and never stored on this server.")
+    st.info("""
+    **Privacy:** Data is processed in your browser session and wiped when the tab is closed.
+    """)
 
 # --- CORE LOGIC ---
-def calculate_tax_logic(df):
+def calculate_tax_logic(df, target_year, hold_days):
     try:
-        # Data Cleaning
         df['time'] = pd.to_datetime(df['time'])
         df = df.sort_values(['time', 'refid'])
         
@@ -49,7 +48,7 @@ def calculate_tax_logic(df):
         tax_data = []
         EPSILON = 1e-9 
 
-        # 1. Trade-Mapping for EUR-values
+        # 1. Trade-Mapping
         trades = {}
         for refid, group in df.groupby('refid'):
             eur_rows = group[group['asset'].isin(['ZEUR', 'EUR'])]
@@ -64,11 +63,10 @@ def calculate_tax_logic(df):
             asset = row['asset']
             if asset in ['ZEUR', 'EUR', 'KFEE']: continue
             
-            # Clean asset name
             asset = asset.replace('ZEUR', '').replace('EUR', '').replace('X', '', 1) if asset.startswith('X') else asset
             raw_amount, fee, date, refid = float(row['amount']), float(row['fee']), row['time'], row['refid']
 
-            # BUY / INFLOW
+            # INFLOW (BUY)
             if raw_amount > 0:
                 eur_paid = trades.get(refid, {}).get('eur_total', 0)
                 inventory.setdefault(asset, []).append({
@@ -78,7 +76,7 @@ def calculate_tax_logic(df):
                     'date': date
                 })
                 
-            # SELL / OUTFLOW
+            # OUTFLOW (SELL)
             elif raw_amount < 0:
                 if asset not in inventory or not inventory[asset]: continue
                 
@@ -93,27 +91,27 @@ def calculate_tax_logic(df):
                     
                     amount_to_process = min(sell_vol_remaining, first_buy['amount'])
                     
-                    # Only calculate tax for assets held <= 365 days (German Tax Logic)
-                    if days_held <= 365:
-                        # Proportional calculations
-                        v_preis = (eur_received / abs_sell_amount) * amount_to_process
-                        k_preis = (first_buy['pure_price_eur'] / (first_buy['amount'] + (0 if first_buy['amount'] > 0 else 1e-12))) * amount_to_process
-                        nk_anschauung = (first_buy['buy_fee'] / (first_buy['amount'] + (0 if first_buy['amount'] > 0 else 1e-12))) * amount_to_process
-                        vk_kosten = (sell_fee / abs_sell_amount) * amount_to_process
+                    # FILTER: Only process if the SELL happened in the selected year 
+                    # AND if it was held LESS than the threshold
+                    if date.year == target_year:
+                        if days_held <= hold_days:
+                            v_preis = (eur_received / abs_sell_amount) * amount_to_process
+                            k_preis = (first_buy['pure_price_eur'] / (first_buy['amount'] + (0 if first_buy['amount'] > 0 else 1e-12))) * amount_to_process
+                            nk_anschauung = (first_buy['buy_fee'] / (first_buy['amount'] + (0 if first_buy['amount'] > 0 else 1e-12))) * amount_to_process
+                            vk_kosten = (sell_fee / abs_sell_amount) * amount_to_process
 
-                        tax_data.append({
-                            'Asset': asset,
-                            'Verkaufsdatum': date.strftime('%d.%m.%Y'),
-                            'Anschaffungsdatum': first_buy['date'].strftime('%d.%m.%Y'),
-                            'Haltedauer (Tage)': days_held,
-                            'Menge': round(amount_to_process, 8),
-                            'Erlös (EUR)': round(v_preis, 2),
-                            'Anschaffungskosten (EUR)': round(k_preis + nk_anschauung, 2),
-                            'Veräußerungskosten (EUR)': round(vk_kosten, 2),
-                            'Gewinn/Verlust': round(v_preis - (k_preis + nk_anschauung) - vk_kosten, 2)
-                        })
+                            tax_data.append({
+                                'Asset': asset,
+                                'Verkaufsdatum': date.strftime('%d.%m.%Y'),
+                                'Anschaffungsdatum': first_buy['date'].strftime('%d.%m.%Y'),
+                                'Haltedauer (Tage)': days_held,
+                                'Menge': round(amount_to_process, 8),
+                                'Erlös (EUR)': round(v_preis, 2),
+                                'Anschaffungskosten (EUR)': round(k_preis + nk_anschauung, 2),
+                                'Gewinn/Verlust': round(v_preis - (k_preis + nk_anschauung) - vk_kosten, 2)
+                            })
 
-                    # FIFO update
+                    # FIFO update (happens regardless of year to keep inventory correct)
                     sell_vol_remaining -= amount_to_process
                     first_buy['amount'] -= amount_to_process
                     if first_buy['amount'] < EPSILON:
@@ -124,55 +122,40 @@ def calculate_tax_logic(df):
         return None, str(e)
 
 # --- MAIN UI ---
-st.title("⚖️ Crypto Tax Calculator (FIFO)")
-st.subheader("Generate your tax report from Kraken Ledger files")
+st.title("⚖️ Crypto Tax Calculator")
+st.write(f"Calculating gains for **{selected_year}** with a **{months_threshold} month** tax-free threshold.")
 
-uploaded_file = st.file_uploader("Drop your kraken_ledger.csv here", type=["csv"])
+uploaded_file = st.file_uploader("Upload your kraken_ledger.csv", type=["csv"])
 
 if uploaded_file:
-    # Read the CSV
     try:
         df_input = pd.read_csv(uploaded_file)
         
-        # Basic validation
-        required_cols = ['time', 'asset', 'amount', 'fee', 'refid']
-        if not all(col in df_input.columns for col in required_cols):
-            st.error("❌ The uploaded file is missing required columns. Please use the original Kraken Ledger export.")
+        with st.spinner('Running FIFO Analysis...'):
+            result_df, error = calculate_tax_logic(df_input, selected_year, days_threshold)
+        
+        if error:
+            st.error(f"Calculation Error: {error}")
+        elif result_df.empty:
+            st.warning(f"No taxable sales found for the year {selected_year}. Either you didn't sell anything, or everything was held longer than {months_threshold} months.")
         else:
-            with st.spinner('Calculating FIFO stacks...'):
-                result_df, error = calculate_tax_logic(df_input)
+            total_profit = result_df['Gewinn/Verlust'].sum()
             
-            if error:
-                st.error(f"❌ Error during calculation: {error}")
-            elif result_df.empty:
-                st.info("ℹ️ No taxable sales found (all assets held > 365 days or no sales recorded).")
-            else:
-                # Results UI
-                st.success("✅ Calculation Complete")
-                
-                col1, col2 = st.columns(2)
-                total_profit = result_df['Gewinn/Verlust'].sum()
-                
-                with col1:
-                    st.metric("Total Taxable Profit/Loss", f"{total_profit:,.2f} €")
-                
-                st.divider()
-                st.dataframe(result_df, use_container_width=True)
+            st.metric(label=f"Total Taxable Profit for {selected_year}", value=f"{total_profit:,.2f} €")
+            
+            st.dataframe(result_df, use_container_width=True)
 
-                # Excel Download
-                buffer = io.BytesIO()
-                with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
-                    result_df.to_excel(writer, index=False, sheet_name='FIFO_Tax_Report')
-                
-                st.download_button(
-                    label="📥 Download Report as Excel",
-                    data=buffer.getvalue(),
-                    file_name=f"Kraken_Tax_Report_{datetime.now().strftime('%Y%m%d')}.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                )
+            # Excel Export
+            buffer = io.BytesIO()
+            with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
+                result_df.to_excel(writer, index=False, sheet_name=f'Tax_{selected_year}')
+            
+            st.download_button(
+                label=f"📥 Download {selected_year} Report",
+                data=buffer.getvalue(),
+                file_name=f"Tax_Report_{selected_year}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
 
     except Exception as e:
-        st.error(f"❌ Failed to parse CSV: {e}")
-else:
-    st.write("---")
-    st.info("Please upload a file to begin.")
+        st.error(f"File Error: {e}")
