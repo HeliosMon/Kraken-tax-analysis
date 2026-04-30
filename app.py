@@ -33,7 +33,7 @@ with st.sidebar:
     days_threshold = months_threshold * 30.44 
 
     st.divider()
-    st.info("📊 **Note:** All headers and calculations are now in English.")
+    st.info("📊 **Note:** Still in TRIAL phase")
 
 # --- CORE LOGIC ---
 def calculate_tax_logic(df, target_year, hold_days):
@@ -158,7 +158,7 @@ if uploaded_file:
                 result_df.to_excel(writer, index=False, sheet_name='Tax_Report')
             
             st.download_button(
-                label="📥 Download English Report (Excel)",
+                label="📥 Download Report (Excel)",
                 data=buffer.getvalue(),
                 file_name=f"Tax_Report_{selected_year}_EN.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
